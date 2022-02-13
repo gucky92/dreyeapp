@@ -1,0 +1,4 @@
+dreye
+
+streamlit
+plotly
