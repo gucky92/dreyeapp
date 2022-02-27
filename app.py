@@ -376,7 +376,7 @@ if filters_file is None and not peaks:
 else:
     wls, filters, labels = load_filters(filter_choice, filters_file, peaks, wls_range)
     n_filters = len(filters)
-    filters_loaded = True
+    filters_loaded = n_filters > 1
     initial_est = load_initial_receptor_estimator(
         filters, 
         wls, 
@@ -549,7 +549,7 @@ def init_form(est):
 ### --- the main window
 
 if not estimator_loaded:
-    st.error("REQUIRED: Setup the opsin sensitivity set and the light sources in the sidebar before proceeding")
+    st.error("REQUIRED: Setup at least 2 opsin sensitivity sets and a set of light sources in the sidebar before proceeding")
     
 
 if filters_loaded and not estimator_loaded:    
