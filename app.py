@@ -691,17 +691,23 @@ if estimator_loaded:
     submitted = st.button('Submit')
         
     if submitted:
-        st.session_state.form_submitted = True
-        st.session_state.args_submitted = (
-            sampling_method, gamut_correction, fit_method, 
-            hull_samples, hull_seed, hull_l1, 
-            spectra_sample_file, spectra_sample_units, 
-            intensity_sample_file, intensity_sample_units, 
-            l2_eps, n_layers
-        )
-        data = register_and_fit(
-            est, wls, *st.session_state.args_submitted
-        )
+        # catching errors
+        if sampling_method == 'sample within gamut' and len(sources) < len(filters):
+            st.error("System of equations is overdetermined; add more "
+                     "light sources in order to sample in hull, so that sources >= sensitivites.")
+            data = {}
+        else:
+            st.session_state.form_submitted = True
+            st.session_state.args_submitted = (
+                sampling_method, gamut_correction, fit_method, 
+                hull_samples, hull_seed, hull_l1, 
+                spectra_sample_file, spectra_sample_units, 
+                intensity_sample_file, intensity_sample_units, 
+                l2_eps, n_layers
+            )
+            data = register_and_fit(
+                est, wls, *st.session_state.args_submitted
+            )
     elif st.session_state.form_submitted:
         data = register_and_fit(
             est, wls, *st.session_state.args_submitted
