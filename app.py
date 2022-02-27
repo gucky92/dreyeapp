@@ -588,125 +588,126 @@ if estimator_loaded:
     st.pyplot(fig)
     
     # set a bunch of points
-    with st.expander("Register and fit captures"):
-        sampling_method = st.selectbox(
-            "Sample creation method", 
+    # with st.expander("Register and fit captures"):
+    st.markdown("### Register and fit captures")
+    sampling_method = st.selectbox(
+        "Sample creation method", 
+        [
+            'sample within gamut', 
+            'upload spectra',
+            'upload intensities', 
+            
+        ]
+    )
+    fit_method = st.selectbox(
+        "Fit method for samples", 
+        [
+            "gaussian", 
+            "excitation", 
+            "poisson", 
+            "minimize variance",
+            "decompose subframes"
+        ],
+    )
+    
+    # form = st.form('Form')
+    # with st.form('Form'):
+    if sampling_method == 'sample within gamut':
+        hull_seed = st.number_input("Seed", min_value=1, value=1)
+        hull_samples = st.number_input("Number of samples", min_value=1, value=20)
+        hull_l1 = st.number_input(
+            "Achromatic value (if 0 all possible achromatic values are sampled)", 
+            min_value=0.0, 
+            max_value=maxq, 
+            value=0.0
+        )
+        spectra_sample_file = None
+        spectra_sample_units = None
+        intensity_sample_file = None
+        intensity_sample_units = None
+    elif sampling_method == 'upload spectra':
+        spectra_sample_file = st.file_uploader(
+            "Upload a `.csv` file with header columns `wls` and different samples.", 
+            type='csv', 
+            accept_multiple_files=False,
+        )
+        spectra_sample_units = st.selectbox(
+            UNITS_TEXT, UNITS_OPTIONS
+        )
+        intensity_sample_file = None
+        intensity_sample_units = None
+        hull_l1 = None
+        hull_samples = None
+        hull_seed = None
+    elif sampling_method == 'upload intensities':
+        intensity_sample_file = st.file_uploader(
+            "Upload a `.csv` file with header columns corresponding to the light source names and rows being different samples.", 
+            type='csv', 
+            accept_multiple_files=False,
+        )
+        intensity_sample_units = st.selectbox(
+            UNITS_TEXT, 
+            UNITS_OPTIONS
+        )
+        spectra_sample_file = None
+        spectra_sample_units = None
+        hull_l1 = None
+        hull_samples = None
+        hull_seed = None
+    else:
+        raise RuntimeError(f"Sampling method not recognized: {sampling_method}")
+    
+    if sampling_method not in ['sample within gamut']:
+        gamut_correction = st.selectbox(
+            "Gamut correction", 
             [
-                'sample within gamut', 
-                'upload spectra',
-                'upload intensities', 
-                
+                "none", 
+                "intensity scaling", 
+                "chromatic scaling", 
+                "adaptive scaling"
             ]
         )
-        fit_method = st.selectbox(
-            "Fit method for samples", 
-            [
-                "gaussian", 
-                "excitation", 
-                "poisson", 
-                "minimize variance",
-                "decompose subframes"
-            ],
+        
+        plot_original = st.checkbox(
+            "Plot samples before gamut correction", 
+            value=False
         )
+    else:
+        gamut_correction = "none"
+        plot_original = False
         
-        # form = st.form('Form')
-        # with st.form('Form'):
-        if sampling_method == 'sample within gamut':
-            hull_seed = st.number_input("Seed", min_value=1, value=1)
-            hull_samples = st.number_input("Number of samples", min_value=1, value=20)
-            hull_l1 = st.number_input(
-                "Achromatic value (if 0 all possible achromatic values are sampled)", 
-                min_value=0.0, 
-                max_value=maxq, 
-                value=0.0
-            )
-            spectra_sample_file = None
-            spectra_sample_units = None
-            intensity_sample_file = None
-            intensity_sample_units = None
-        elif sampling_method == 'upload spectra':
-            spectra_sample_file = st.file_uploader(
-                "Upload a `.csv` file with header columns `wls` and different samples.", 
-                type='csv', 
-                accept_multiple_files=False,
-            )
-            spectra_sample_units = st.selectbox(
-                UNITS_TEXT, UNITS_OPTIONS
-            )
-            intensity_sample_file = None
-            intensity_sample_units = None
-            hull_l1 = None
-            hull_samples = None
-            hull_seed = None
-        elif sampling_method == 'upload intensities':
-            intensity_sample_file = st.file_uploader(
-                "Upload a `.csv` file with header columns corresponding to the light source names and rows being different samples.", 
-                type='csv', 
-                accept_multiple_files=False,
-            )
-            intensity_sample_units = st.selectbox(
-                UNITS_TEXT, 
-                UNITS_OPTIONS
-            )
-            spectra_sample_file = None
-            spectra_sample_units = None
-            hull_l1 = None
-            hull_samples = None
-            hull_seed = None
-        else:
-            raise RuntimeError(f"Sampling method not recognized: {sampling_method}")
+    if fit_method in ['poisson', 'gaussian', 'excitation']:
+        l2_eps = None
+        n_layers = None
+    elif fit_method == 'minimize variance':
+        l2_eps = st.number_input('Allowed L2-error for variance minimization', min_value=0.0001, value=0.01, step=0.001, format="%.4f")
+        n_layers = None
+    elif fit_method == 'decompose subframes':
+        n_layers = st.number_input('Number of subframes (subframes<sources)', min_value=1, max_value=len(sources)-1, value=len(sources)-1)
+        l2_eps = None
+    else:
+        raise RuntimeError(f"Fit method not recognize: {fit_method}")
+    
+    submitted = st.button('Submit')
         
-        if sampling_method not in ['sample within gamut']:
-            gamut_correction = st.selectbox(
-                "Gamut correction", 
-                [
-                    "none", 
-                    "intensity scaling", 
-                    "chromatic scaling", 
-                    "adaptive scaling"
-                ]
-            )
-            
-            plot_original = st.checkbox(
-                "Plot samples before gamut correction", 
-                value=False
-            )
-        else:
-            gamut_correction = "none"
-            plot_original = False
-            
-        if fit_method in ['poisson', 'gaussian', 'excitation']:
-            l2_eps = None
-            n_layers = None
-        elif fit_method == 'minimize variance':
-            l2_eps = st.number_input('Allowed L2-error for variance minimization', min_value=0.0001, value=0.01, step=0.001, format="%.4f")
-            n_layers = None
-        elif fit_method == 'decompose subframes':
-            n_layers = st.number_input('Number of subframes (subframes<sources)', min_value=1, max_value=len(sources)-1, value=len(sources)-1)
-            l2_eps = None
-        else:
-            raise RuntimeError(f"Fit method not recognize: {fit_method}")
-        
-        submitted = st.button('Submit')
-            
-        if submitted:
-            st.session_state.form_submitted = True
-            st.session_state.args_submitted = (
-                sampling_method, gamut_correction, fit_method, 
-                hull_samples, hull_seed, hull_l1, 
-                spectra_sample_file, spectra_sample_units, 
-                intensity_sample_file, intensity_sample_units, 
-                l2_eps, n_layers
-            )
-            data = register_and_fit(
-                est, wls, *st.session_state.args_submitted
-            )
-        elif st.session_state.form_submitted:
-            data = register_and_fit(
-                est, wls, *st.session_state.args_submitted
-            )
-        else:
-            data = {}
+    if submitted:
+        st.session_state.form_submitted = True
+        st.session_state.args_submitted = (
+            sampling_method, gamut_correction, fit_method, 
+            hull_samples, hull_seed, hull_l1, 
+            spectra_sample_file, spectra_sample_units, 
+            intensity_sample_file, intensity_sample_units, 
+            l2_eps, n_layers
+        )
+        data = register_and_fit(
+            est, wls, *st.session_state.args_submitted
+        )
+    elif st.session_state.form_submitted:
+        data = register_and_fit(
+            est, wls, *st.session_state.args_submitted
+        )
+    else:
+        data = {}
         
     B = data.get('B', None)
     Bfit = data.get('Bfit', None)
@@ -731,8 +732,11 @@ if estimator_loaded:
     )
     
     # download zip file - create cache zip function
-    for filename, csv in data.get('csvs', {}).items():
-        st.download_button(
+    ncols = 3
+    cols = st.columns(ncols)
+    for idx, (filename, csv) in enumerate(data.get('csvs', {}).items()):
+        col = cols[idx % ncols]
+        col.download_button(
             f"Download data of {filename.replace('_', ' ')}", 
             csv, 
             file_name=f'{filename}.csv',
