@@ -769,12 +769,15 @@ if estimator_loaded:
         else:
             fig.legend(handles, labels, bbox_to_anchor=(1.5, 0.7))
             fig.set_size_inches(5/2, 5/2)
-            _, col, _ = st.columns((2, 4, 2))
-            col.pyplot(fig)
+            col1, col2 = st.columns(2)
+            col2.pyplot(fig)
         
     if len(filters) in [2, 3] and (len(filters) <= len(sources)):
         # st.markdown("### Chromaticity diagram")
-        _, col, _ = st.columns([1, 3, 1])
+        if len(filters) == 2:
+            col = col2
+        else:
+            _, col, _ = st.columns([1, 3, 1])
         fig, ax = plt.subplots()
         fig.set_size_inches(10/2, 7/2)
         ax.set_title("Chromaticity diagram")
