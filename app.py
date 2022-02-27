@@ -761,14 +761,15 @@ if estimator_loaded:
         fig.suptitle("Gamut across opsin pairs")
         # create legend
         handles, labels = axes[0].get_legend_handles_labels()
-        fig.legend(handles, labels, bbox_to_anchor=(1.2, 0.7))
         
         if ncols == 3:
+            fig.legend(handles, labels, bbox_to_anchor=(1.2, 0.7))
             fig.set_size_inches(15/2, 5/2 * np.ceil(len(axes) / 3))
             st.pyplot(fig)
         else:
+            fig.legend(handles, labels, bbox_to_anchor=(1.5, 0.7))
             fig.set_size_inches(5/2, 5/2)
-            _, col, _ = st.columns((2, 3, 2))
+            _, col, _ = st.columns((2, 4, 2))
             col.pyplot(fig)
         
     if len(filters) in [2, 3] and (len(filters) <= len(sources)):
