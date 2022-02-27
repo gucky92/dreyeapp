@@ -693,8 +693,8 @@ if estimator_loaded:
     if submitted:
         # catching errors
         if sampling_method == 'sample within gamut' and len(sources) < len(filters):
-            st.error("System of equations is overdetermined.\n"
-                     "Add more light sources in order to sample in hull.\n"
+            st.error("System of equations is overdetermined."
+                     "Add more light sources in order to sample in hull."
                      "There must be more light sources than sensitivities.")
             data = {}
         else:
