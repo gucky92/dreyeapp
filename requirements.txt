@@ -1,4 +1,3 @@
-dreye
+dreye>=1.0.1
 
 streamlit
-plotly
