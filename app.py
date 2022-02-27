@@ -50,6 +50,7 @@ def register_and_fit(
     intensity_sample_file, intensity_sample_units, 
     l2_eps, n_layers
 ):
+    csvs = {}
     data = {}
     B = None
     if sampling_method == 'sample within gamut':
@@ -63,21 +64,29 @@ def register_and_fit(
     else:
         raise RuntimeWarning(f"Sampling method not recognized: {sampling_method}")
     
+    sample_index = pd.Index(range(len(B)), name='sample_number')
+    
+    # df.to_csv().encode('utf-8')
+    csvs['target_captures'] = pd.DataFrame(B, columns=est.labels, index=sample_index).to_csv().encode('utf8')
+    
     if gamut_correction == 'intensity scaling':
         data['Bbefore'] = B
         data['inhull_before'] = est.in_hull(B)
         B = est.gamut_l1_scaling(B)
+        csvs['corrected_captures'] = pd.DataFrame(B, columns=est.labels, index=sample_index).to_csv().encode('utf8')
         data['r2before'] = r2_score(data['Bbefore'], B, multioutput="raw_values")
     elif gamut_correction == 'chromatic scaling':
         data['Bbefore'] = B
         data['inhull_before'] = est.in_hull(B)
         B = est.gamut_l1_scaling(B)
         B = est.gamut_dist_scaling(B)
+        csvs['corrected_captures'] = pd.DataFrame(B, columns=est.labels, index=sample_index).to_csv().encode('utf8')
         data['r2before'] = r2_score(data['Bbefore'], B, multioutput="raw_values")
     elif gamut_correction == 'adaptive scaling':
         data['Bbefore'] = B
         data['inhull_before'] = est.in_hull(B)
         _, _, B = est.fit_adaptive(B, delta_norm1=1e-4, delta_radius=1e-3, adaptive_objective='max', scale_w=np.array([0.001, 10]))
+        csvs['corrected_captures'] = pd.DataFrame(B, columns=est.labels, index=sample_index).to_csv().encode('utf8')
         data['r2before'] = r2_score(data['Bbefore'], B, multioutput="raw_values")
         
     data['B'] = B
@@ -87,20 +96,30 @@ def register_and_fit(
         Xfit, Bfit = est.fit(B, model=fit_method)
         data['Xfit'] = Xfit
         data['Bfit'] = Bfit
+        csvs['fitted_captures'] = pd.DataFrame(Bfit, columns=est.labels, index=sample_index).to_csv().encode('utf8')
+        csvs['fitted_intensities'] = pd.DataFrame(Xfit, columns=est.sources_labels, index=sample_index).to_csv().encode('utf8')
     elif fit_method == 'minimize variance':
         Xfit, Bfit, Bvar = est.minimize_variance(B, l2_eps=l2_eps)
         data['Bvar'] = Bvar
         data['Xfit'] = Xfit
         data['Bfit'] = Bfit
+        csvs['fitted_captures'] = pd.DataFrame(Bfit, columns=est.labels, index=sample_index).to_csv().encode('utf8')
+        csvs['capture_variances'] = pd.DataFrame(Bvar, columns=est.labels, index=sample_index).to_csv().encode('utf8')
+        csvs['fitted_intensities'] = pd.DataFrame(Xfit, columns=est.sources_labels, index=sample_index).to_csv().encode('utf8')
     elif fit_method == 'decompose subframes':
         Xfit, Pfit, Bfit = est.fit_decomposition(B, n_layers=n_layers)
+        layer_labels = [f"subframe_{i}" for i in range(1, n_layers+1)]
         data['Xfit'] = Xfit
         data['Bfit'] = Bfit
         data['Pfit'] = Pfit
+        csvs['fitted_captures'] = pd.DataFrame(Bfit, columns=est.labels, index=sample_index).to_csv().encode('utf8')
+        csvs['fitted_intensities'] = pd.DataFrame(Xfit, columns=est.sources_labels, index=pd.Index(layer_labels, name='layer_label')).to_csv().encode('utf8')
+        csvs['subframe_intensities'] = pd.DataFrame(Pfit, columns=layer_labels, index=sample_index).to_csv().encode('utf8')
     else:
         raise RuntimeError(f"Fit method not recognize: {fit_method}")
     
     data['r2'] = r2_score(B, Bfit, multioutput="raw_values")
+    data['csvs'] = csvs
     
     return data
 
@@ -504,14 +523,14 @@ def get_filters_colors(filters):
 def get_sources_colors(sources):
     return sns.color_palette('rainbow', len(sources))
 
-@st.cache
-def init_chromaticity_state():
-    if 'azimuth' not in st.session_state:
-        st.session_state.azimuth = AZIMUTH_DEFAULT
-    if 'elevation' not in st.session_state:
-        st.session_state.elevation = ELEVATION_DEFAULT
-    if 'playing' not in st.session_state:
-        st.session_state.playing = False
+# @st.cache
+# def init_chromaticity_state():
+#     if 'azimuth' not in st.session_state:
+#         st.session_state.azimuth = AZIMUTH_DEFAULT
+#     if 'elevation' not in st.session_state:
+#         st.session_state.elevation = ELEVATION_DEFAULT
+#     if 'playing' not in st.session_state:
+#         st.session_state.playing = False
         
 def toggle_play():
     st.session_state.playing = not st.session_state.playing
@@ -711,12 +730,14 @@ if estimator_loaded:
         """
     )
     
-    # TODO download buttons:
     # download zip file - create cache zip function
-    # if 'Xfit' in data:
-    #     st.download_button(
-    #         "Download data of fit"
-    #     )
+    for filename, csv in data.get('csvs', {}).items():
+        st.download_button(
+            f"Download data of {filename.replace('_', ' ')}", 
+            csv, 
+            file_name=f'{filename}.csv',
+            mime='text/csv',
+        )
     
     if len(sources) > 1:
         # st.markdown("### Gamut across opsin pairs")
@@ -751,7 +772,12 @@ if estimator_loaded:
         # st.markdown("### Chromaticity diagram")
         _, col, _ = st.columns([1, 3, 1])
         
-        init_chromaticity_state()
+        if 'azimuth' not in st.session_state:
+            st.session_state.azimuth = AZIMUTH_DEFAULT
+        if 'elevation' not in st.session_state:
+            st.session_state.elevation = ELEVATION_DEFAULT
+        if 'playing' not in st.session_state:
+            st.session_state.playing = False
         # elevation = st.slider("Elevation", min_value=-90, max_value=90, value=30, step=15)
         # azimuth = st.slider("Azimuth", min_value=-180, max_value=180, value=-45, step=15)
         ax = est.simplex_plot(B=B, color='black', alpha=1)
