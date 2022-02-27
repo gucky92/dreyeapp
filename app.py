@@ -8,20 +8,31 @@ import pandas as pd
 from scipy.interpolate import interp1d
 import matplotlib.pyplot as plt
 import seaborn as sns
-import plotly.io as pio
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
+from sklearn.metrics import r2_score
 
 import streamlit as st
 
 import dreye
 
+# ensure constrained layout
+plt.rcParams['figure.constrained_layout.use'] = True
+
 
 ### --- caching functions
 
-# TODO check if color (from labels) in matplotlib - then use that
+# TODO add unit conversion
 
 appfolder = os.path.dirname(__file__)
+AZIMUTH_DEFAULT = -45
+ELEVATION_DEFAULT = 30
+STANDARD_FLUX_SCALE = 10 ** 6 # micro
+UNITS_OPTIONS = [
+    'uE', 
+    'E',
+    'W/m^2', 
+    'uW/cm^2'
+]
+UNITS_TEXT = "Units used in file (E=mol/s/m^2)"
 
 # preload some data
 @st.cache
@@ -30,6 +41,68 @@ def load_thorlabs():
     return pd.read_csv(tl_file).set_index('wls')
 
 thorlabs = load_thorlabs()
+
+@st.cache
+def register_and_fit(
+    est, wls, sampling_method, gamut_correction, fit_method, 
+    hull_samples, hull_seed, hull_l1, 
+    spectra_sample_file, spectra_sample_units, 
+    intensity_sample_file, intensity_sample_units, 
+    l2_eps, n_layers
+):
+    data = {}
+    B = None
+    if sampling_method == 'sample within gamut':
+        B = est.sample_in_hull(hull_samples, hull_seed, l1=(None if not hull_l1 else hull_l1))
+    elif sampling_method == 'upload spectra':
+        spectra_samples = load_spectra_samples(spectra_sample_file, wls, spectra_sample_units)
+        B = est.relative_capture(spectra_samples)
+    elif sampling_method == 'upload intensities':
+        ints_samples = load_light_source_samples(intensity_sample_file, intensity_sample_units, est=est)
+        B = est.system_relative_capture(ints_samples)
+    else:
+        raise RuntimeWarning(f"Sampling method not recognized: {sampling_method}")
+    
+    if gamut_correction == 'intensity scaling':
+        data['Bbefore'] = B
+        data['inhull_before'] = est.in_hull(B)
+        B = est.gamut_l1_scaling(B)
+        data['r2before'] = r2_score(data['Bbefore'], B, multioutput="raw_values")
+    elif gamut_correction == 'chromatic scaling':
+        data['Bbefore'] = B
+        data['inhull_before'] = est.in_hull(B)
+        B = est.gamut_l1_scaling(B)
+        B = est.gamut_dist_scaling(B)
+        data['r2before'] = r2_score(data['Bbefore'], B, multioutput="raw_values")
+    elif gamut_correction == 'adaptive scaling':
+        data['Bbefore'] = B
+        data['inhull_before'] = est.in_hull(B)
+        _, _, B = est.fit_adaptive(B, delta_norm1=1e-4, delta_radius=1e-3, adaptive_objective='max', scale_w=np.array([0.001, 10]))
+        data['r2before'] = r2_score(data['Bbefore'], B, multioutput="raw_values")
+        
+    data['B'] = B
+    data['inhull'] = est.in_hull(B)
+    
+    if fit_method in ['poisson', 'gaussian', 'excitation']:
+        Xfit, Bfit = est.fit(B, model=fit_method)
+        data['Xfit'] = Xfit
+        data['Bfit'] = Bfit
+    elif fit_method == 'minimize variance':
+        Xfit, Bfit, Bvar = est.minimize_variance(B, l2_eps=l2_eps)
+        data['Bvar'] = Bvar
+        data['Xfit'] = Xfit
+        data['Bfit'] = Bfit
+    elif fit_method == 'decompose subframes':
+        Xfit, Pfit, Bfit = est.fit_decomposition(B, n_layers=n_layers)
+        data['Xfit'] = Xfit
+        data['Bfit'] = Bfit
+        data['Pfit'] = Pfit
+    else:
+        raise RuntimeError(f"Fit method not recognize: {fit_method}")
+    
+    data['r2'] = r2_score(B, Bfit, multioutput="raw_values")
+    
+    return data
 
 # globally cached parameters
 @st.cache
@@ -62,13 +135,13 @@ def load_filters(filter_choice, filters_file, peaks, wls_range):
         template_func = getattr(dreye, filter_choice)
         wls = np.arange(*wls_range, 1.0)
         filters = template_func(wls, np.array(peaks)[:, None])
-        labels = np.arange(filters.shape[0])
+        labels = np.array([f"p{p}" for p in peaks])
 
     return wls, filters, labels
 
 
 @st.cache
-def load_sources(sources_file, wls, thorlabs_list):
+def load_sources(sources_file, wls, thorlabs_list, units=None):
     if thorlabs_list:
         df = thorlabs[thorlabs_list]
     else:
@@ -82,6 +155,8 @@ def load_sources(sources_file, wls, thorlabs_list):
         axis=-1, bounds_error=False, 
         fill_value=0
     )(wls)
+    if units is not None:
+        sources = unit_conversion(sources, wls, units)
     # Shouldn't be called within
     if np.all(sources == 0, axis=-1).any():
         raise ValueError(
@@ -108,8 +183,21 @@ def load_filters_uncertainty(uncertainty_file, labels, wls):
     return filters
 
 
+def unit_conversion(spectra, wls, units):
+    if units == 'E':
+        return spectra * STANDARD_FLUX_SCALE
+    elif units == 'uE':
+        return spectra * (10 ** -6 * STANDARD_FLUX_SCALE)
+    elif units == 'W/m^2':
+        return dreye.irr2flux(spectra, wls) * STANDARD_FLUX_SCALE
+    elif units == 'uW/cm^2':
+        return dreye.irr2flux(spectra*100, wls) * STANDARD_FLUX_SCALE
+    else:
+        raise NameError(f"Unit convention `{units}` not recognized")
+
+
 @st.cache
-def load_spectrum(spectrum_file, wls):
+def load_spectrum(spectrum_file, wls, units=None):
     if spectrum_file is None:
         return
     df = pd.read_csv(spectrum_file).set_index('wls')
@@ -123,7 +211,54 @@ def load_spectrum(spectrum_file, wls):
             uwls, spectrum, bounds_error=False, fill_value=0, 
             axis=-1
         )(wls)
+    
+    if units is not None:
+        spectrum = unit_conversion(spectrum, wls, units)
+        
     return spectrum
+
+
+@st.cache
+def load_spectra_samples(spectra_file, wls, units):
+    if spectra_file is None:
+        return
+    df = pd.read_csv(spectra_file).set_index('wls')
+    uwls = df.index.to_numpy().astype(np.float64)
+    spectra = df.to_numpy().T.astype(np.float64)
+    
+    if (wls.size != uwls.size) or not np.allclose(wls, uwls):
+        spectra = interp1d(
+            uwls, spectra, bounds_error=False, fill_value=0, 
+            axis=-1
+        )(wls)
+        
+    if units is not None:
+        spectra = unit_conversion(spectra, wls, units)
+
+    return spectra
+
+
+@st.cache
+def load_light_source_samples(intensities_samples, units, est):
+    df = pd.read_csv(intensities_samples).loc[:, est.sources_labels]
+    scalars = dreye.integral(dreye.flux2irr(est.sources), est.wls)
+    if units is None:
+        return df.to_numpy()
+    elif units == 'E':
+        return df.to_numpy() * STANDARD_FLUX_SCALE
+    elif units == 'uE':
+        return df.to_numpy() * (10 ** -6 * STANDARD_FLUX_SCALE)
+    elif units == 'W/m^2':
+        return df.to_numpy() * scalars
+    elif units == 'uW/cm^2':
+        return df.to_numpy() * scalars * 100
+    else:
+        raise NameError(f"Unit convention `{units}` not recognized")
+    
+    
+@st.cache
+def compute_hull(est):
+    return est.compute_hull()
     
    
 @st.cache
@@ -155,6 +290,26 @@ def load_receptor_estimator(
     if spectrum is not None:
         est.register_background_adaptation(spectrum)
     return est
+
+
+# initial estimator without sources
+@st.cache
+def load_initial_receptor_estimator(
+    filters, 
+    wls, 
+    labels, 
+):
+    est = dreye.ReceptorEstimator(
+        filters=filters, 
+        domain=wls, 
+        labels=labels,
+    )
+    return est
+
+
+@st.cache
+def get_maxq(est):
+    return est.system_relative_capture(est.ub).sum()
 
 ### --- START
 
@@ -203,6 +358,11 @@ else:
     wls, filters, labels = load_filters(filter_choice, filters_file, peaks, wls_range)
     n_filters = len(filters)
     filters_loaded = True
+    initial_est = load_initial_receptor_estimator(
+        filters, 
+        wls, 
+        labels
+    )
     
 if filters_loaded:
     st.sidebar.markdown("### Assign a set of light sources")
@@ -221,6 +381,7 @@ if filters_loaded:
             options=list(thorlabs.columns)
         )
         sources_file = None
+        sources_units = None
     else:
         thorlabs_list = None
         sources_file = st.sidebar.file_uploader(
@@ -228,11 +389,14 @@ if filters_loaded:
             type='csv', 
             accept_multiple_files=False, 
         )
+        sources_units = st.sidebar.selectbox(
+            UNITS_TEXT, UNITS_OPTIONS
+        )
 
     if sources_file is None and not thorlabs_list:
         sources_loaded = False
     else:
-        sources, sources_labels = load_sources(sources_file, wls, thorlabs_list)
+        sources, sources_labels = load_sources(sources_file, wls, thorlabs_list, units=sources_units)
         n_sources = len(sources)        
         # max intensity
         st.sidebar.markdown("Max intensity of each light source (in units of flux).")
@@ -260,7 +424,7 @@ if filters_loaded and sources_loaded:
         options=[
             'light source intensities', 
             'absolute captures', 
-            'intensity spectrum (in units of flux)', 
+            'intensity spectrum', 
         ]
     )
     if adaptional_type == 'light source intensities':
@@ -289,7 +453,8 @@ if filters_loaded and sources_loaded:
             "Spectrum photoreceptors are adapted to. "
             "Upload a `.csv` file with header columns `wls` and `spectrum`. "
         )
-        spectrum = load_spectrum(spectrum_file, wls)
+        spectrum_units = st.sidebar.selectbox(UNITS_TEXT, UNITS_OPTIONS)
+        spectrum = load_spectrum(spectrum_file, wls, units=spectrum_units)
         adapt_ints = None
         K = None
         
@@ -324,94 +489,285 @@ if filters_loaded and sources_loaded:
         adapt_ints, 
         spectrum,
     )
+    maxq = get_maxq(est)
+    hull_size = compute_hull(est)
     estimator_loaded = True
     
 
 # load the various things
+
+@st.cache
+def get_filters_colors(filters):
+    return sns.color_palette('Greys', len(filters)+2)[1:-1]
+
+@st.cache
+def get_sources_colors(sources):
+    return sns.color_palette('rainbow', len(sources))
+
+@st.cache
+def init_chromaticity_state():
+    if 'azimuth' not in st.session_state:
+        st.session_state.azimuth = AZIMUTH_DEFAULT
+    if 'elevation' not in st.session_state:
+        st.session_state.elevation = ELEVATION_DEFAULT
+    if 'playing' not in st.session_state:
+        st.session_state.playing = False
+        
+def toggle_play():
+    st.session_state.playing = not st.session_state.playing
+    st.session_state.azimuth -= 1
+    
+def reset():
+    st.session_state.azimuth = AZIMUTH_DEFAULT
+    st.session_state.elevation = ELEVATION_DEFAULT
+  
+@st.cache  
+def init_form(est):
+    st.session_state.form_submitted = False
+    st.session_state.args_submitted = ()    
+    
 
 ### --- the main window
 
 if not estimator_loaded:
     st.error("REQUIRED: Setup the opsin sensitivity set and the light sources in the sidebar before proceeding")
     
-    
-with st.expander("Color Model Summary"):
-    # pairwise plots 
-    # gamut plot
-    # capture heat matrix
-    if estimator_loaded:
-        filters_colors = sns.color_palette('Greys', len(filters)+2)[1:-1]
-        
-        fig, ax1 = plt.subplots()
 
-        ax1 = est.filter_plot(colors=filters_colors, ax=ax1)
-        ax1.set_xlabel('wavelength (nm)')
-        ax1.set_ylabel('relative sensitivity (a.u.)')
-        ax1.legend(loc=2)
+if filters_loaded and not estimator_loaded:    
+    filters_colors = get_filters_colors(filters)
+    fig, ax1 = plt.subplots()
+    ax1.set_title("Spectral sensitivities")
+    fig.set_size_inches(7, 7/2)
+    ax1 = initial_est.filter_plot(colors=filters_colors, ax=ax1)
+    ax1.set_xlabel('wavelength (nm)')
+    ax1.set_ylabel('relative sensitivity (a.u.)')
+    ax1.legend(loc=2)
+    st.pyplot(fig)
     
-        sources_colors = sns.color_palette('rainbow', len(sources))
-        ax2 = plt.twinx(ax1)
-        est.sources_plot(colors=sources_colors, ax=ax2)
-        ax2.set_ylabel('relative intensity (1/nm)')
-        ax2.legend(loc=1)
+
+# with st.expander("Color Model Summary"):
+# pairwise plots 
+# gamut plot
+# capture heat matrix
+if estimator_loaded:  
+    init_form(est)   
+    # st.markdown("### Normalized spectra and spectral sensitivities")
+    filters_colors = get_filters_colors(filters)
+    fig, ax1 = plt.subplots()
+    ax1.set_title("Normalized spectra and spectral sensitivities")
+    fig.set_size_inches(7, 7/2)
+    ax1 = est.filter_plot(colors=filters_colors, ax=ax1)
+    ax1.set_xlabel('wavelength (nm)')
+    ax1.set_ylabel('relative sensitivity (a.u.)')
+    ax1.legend(loc=2)
+
+    sources_colors = get_sources_colors(sources)
+    ax2 = plt.twinx(ax1)
+    est.sources_plot(colors=sources_colors, ax=ax2)
+    ax2.set_ylabel('relative intensity (1/nm)')
+    ax2.legend(loc=1)
+    st.pyplot(fig)
+    
+    # set a bunch of points
+    with st.expander("Register and fit captures"):
+        sampling_method = st.selectbox(
+            "Sample creation method", 
+            [
+                'sample within gamut', 
+                'upload spectra',
+                'upload intensities', 
+                
+            ]
+        )
+        fit_method = st.selectbox(
+            "Fit method for samples", 
+            [
+                "gaussian", 
+                "excitation", 
+                "poisson", 
+                "minimize variance",
+                "decompose subframes"
+            ],
+        )
         
+        # form = st.form('Form')
+        # with st.form('Form'):
+        if sampling_method == 'sample within gamut':
+            hull_seed = st.number_input("Seed", min_value=1, value=1)
+            hull_samples = st.number_input("Number of samples", min_value=1, value=20)
+            hull_l1 = st.number_input(
+                "Achromatic value (if 0 all possible achromatic values are sampled)", 
+                min_value=0.0, 
+                max_value=maxq, 
+                value=0.0
+            )
+            spectra_sample_file = None
+            spectra_sample_units = None
+            intensity_sample_file = None
+            intensity_sample_units = None
+        elif sampling_method == 'upload spectra':
+            spectra_sample_file = st.file_uploader(
+                "Upload a `.csv` file with header columns `wls` and different samples.", 
+                type='csv', 
+                accept_multiple_files=False,
+            )
+            spectra_sample_units = st.selectbox(
+                UNITS_TEXT, UNITS_OPTIONS
+            )
+            intensity_sample_file = None
+            intensity_sample_units = None
+            hull_l1 = None
+            hull_samples = None
+            hull_seed = None
+        elif sampling_method == 'upload intensities':
+            intensity_sample_file = st.file_uploader(
+                "Upload a `.csv` file with header columns corresponding to the light source names and rows being different samples.", 
+                type='csv', 
+                accept_multiple_files=False,
+            )
+            intensity_sample_units = st.selectbox(
+                UNITS_TEXT, 
+                UNITS_OPTIONS
+            )
+            spectra_sample_file = None
+            spectra_sample_units = None
+            hull_l1 = None
+            hull_samples = None
+            hull_seed = None
+        else:
+            raise RuntimeError(f"Sampling method not recognized: {sampling_method}")
+        
+        if sampling_method not in ['sample within gamut']:
+            gamut_correction = st.selectbox(
+                "Gamut correction", 
+                [
+                    "none", 
+                    "intensity scaling", 
+                    "chromatic scaling", 
+                    "adaptive scaling"
+                ]
+            )
+            
+            plot_original = st.checkbox(
+                "Plot samples before gamut correction", 
+                value=False
+            )
+        else:
+            gamut_correction = "none"
+            plot_original = False
+            
+        if fit_method in ['poisson', 'gaussian', 'excitation']:
+            l2_eps = None
+            n_layers = None
+        elif fit_method == 'minimize variance':
+            l2_eps = st.number_input('Allowed L2-error for variance minimization', min_value=0.0001, value=0.01, step=0.001, format="%.4f")
+            n_layers = None
+        elif fit_method == 'decompose subframes':
+            n_layers = st.number_input('Number of subframes (subframes<sources)', min_value=1, max_value=len(sources)-1, value=len(sources)-1)
+            l2_eps = None
+        else:
+            raise RuntimeError(f"Fit method not recognize: {fit_method}")
+        
+        submitted = st.button('Submit')
+            
+        if submitted:
+            st.session_state.form_submitted = True
+            st.session_state.args_submitted = (
+                sampling_method, gamut_correction, fit_method, 
+                hull_samples, hull_seed, hull_l1, 
+                spectra_sample_file, spectra_sample_units, 
+                intensity_sample_file, intensity_sample_units, 
+                l2_eps, n_layers
+            )
+            data = register_and_fit(
+                est, wls, *st.session_state.args_submitted
+            )
+        elif st.session_state.form_submitted:
+            data = register_and_fit(
+                est, wls, *st.session_state.args_submitted
+            )
+        else:
+            data = {}
+        
+    B = data.get('B', None)
+    Bfit = data.get('Bfit', None)
+    Bbefore = data.get('Bbefore', None)
+    
+    summaries = f"* Size of the stimulation system relative to a perfect system: {np.round(hull_size, 2)}.\n"
+    if 'inhull_before' in data:
+        summaries += f"* Fraction of captures within the gamut before correction: {np.round(np.mean(data.get('inhull_before', 0)), 2)}.\n"
+    if 'r2before' in data:
+        summaries += f"* R2-scores for gamut correction: {np.round(data['r2before'], 2).tolist()}.\n"
+    if 'inhull' in data:
+        summaries += f"* Fraction of captures within the gamut after correction: {np.round(np.mean(data.get('inhull', 0)), 2)}.\n"
+    if 'r2' in data:
+        summaries += f"* R2-scores for fit: {np.round(data['r2'], 2).tolist()}.\n"  
+    
+    # show stats
+    st.markdown(
+        f"""
+### Summary Stats
+{summaries}
+        """
+    )
+    
+    # TODO download buttons:
+    # download zip file - create cache zip function
+    # if 'Xfit' in data:
+    #     st.download_button(
+    #         "Download data of fit"
+    #     )
+    
+    if len(sources) > 1:
+        # st.markdown("### Gamut across opsin pairs")
+        ncols = (3 if len(filters) > 2 else 1)
+        fig, axes = est.gamut_plot(B=B, colors=sources_colors, ncols=ncols, color='gray', alpha=0.5, label='target')
+        if plot_original and Bbefore is not None:
+            est.gamut_plot(B=Bbefore, sources_vectors=False, ncols=ncols, axes=axes, color='lightgrey', alpha=0.5, label='before\ncorrection', marker='s')
+        if Bfit is not None:
+            est.gamut_plot(B=Bfit, sources_vectors=False, ncols=ncols, axes=axes, color='black', alpha=0.5, label='fits', marker='x')
+        fig.suptitle("Gamut across opsin pairs")
+        if ncols == 3:
+            fig.set_size_inches(15/2, 5/2 * np.ceil(len(axes) / 3))
+        else:
+            fig.set_size_inches(5/2, 5/2)
+        
+            
+        # create legend
+        handles, labels = axes[0].get_legend_handles_labels()
+        fig.legend(handles, labels, bbox_to_anchor=(1.2, 0.7))
         st.pyplot(fig)
-    # fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # if filters_loaded:
-    #     for label, sensitivity in zip(labels, filters):
-    #         filter_trace = go.Scatter(
-    #             x=wls, 
-    #             y=sensitivity,
-    #             name=f"opsin {label}"
-    #         )
-
-    #         fig.add_trace(filter_trace)
-            
-
-    # if sources_loaded:
-    #     for label, source in zip(sources_labels, sources):
-    #         source_trace = go.Scatter(
-    #             x=wls, 
-    #             y=source, 
-    #             name=f"{label}"
-    #         )
-            
-    #         fig.add_trace(source_trace, secondary_y=True)
-            
-    # fig.update_layout(title_text='Spectral sensitivities and light sources')
-    # fig.update_xaxes(title_text='wavelength (nm)', showgrid=True)
-    # fig.update_yaxes(title_text='sensitivity', showgrid=True, secondary_y=False)
-    # fig.update_yaxes(title_text='normalized intensity', showgrid=False, secondary_y=True)
-            
-    # st.plotly_chart(fig, use_container_width=True)
-    
-# registering values !!!
-# TODO how to organize?
-
-# set a bunch of points
-# plot the points in gamut plot, etc. - visualization
-
-    
-with st.expander("Randomly sample points in gamut"):
-    nsamples = st.number_input("Number of samples", min_value=0, value=1)
-    
-with st.expander("Analyze intensity values within the receptor model"):
-    isets_file = st.file_uploader("Upload sets of intensities as a CSV File.")
-    
-with st.expander("Fit and analyze a set of capture values"):
-    # randomly sample using a gaussian, uniform, qmc, etc.
-    qsets_file = st.file_uploader("Upload sets of capture values")
-    
-with st.expander("Fit a hyperspectral image using the color model"):
-    hyperspectral_file = st.file_uploader("Upload a hyperspectral image.")
-    
-
-# Layout right to left
-# Goal is to get a set of intensities that 
-# correspond to a desired stimulus
-# choosing stimuli to fit or get
-# sampling, 
-# uploading hyperspectral image, 
-# upload a set of capture values
-# plot capture values from uploaded intensities
+        
+    if len(filters) in [2, 3] and (len(filters) <= len(sources)):
+        # st.markdown("### Chromaticity diagram")
+        _, col, _ = st.columns([1, 3, 1])
+        fig, ax = plt.subplots()
+        fig.set_size_inches(10/2, 7/2)
+        ax.set_title("Chromaticity diagram")
+        est.simplex_plot(B=B, ax=ax, color='gray', alpha=0.5)
+        col.pyplot(fig)
+        
+    if len(filters) in [4] and (len(filters) <= len(sources)):
+        # st.markdown("### Chromaticity diagram")
+        _, col, _ = st.columns([1, 3, 1])
+        
+        init_chromaticity_state()
+        # elevation = st.slider("Elevation", min_value=-90, max_value=90, value=30, step=15)
+        # azimuth = st.slider("Azimuth", min_value=-180, max_value=180, value=-45, step=15)
+        ax = est.simplex_plot(B=B, color='black', alpha=1)
+        ax.view_init(ELEVATION_DEFAULT, st.session_state.azimuth)
+        fig = plt.gcf()
+        fig.set_size_inches(7/2, 7/2)
+        ax.set_title("Chromaticity diagram")
+        
+        player = col.pyplot(fig)
+        
+        # controls
+        _, _, lcenter, center, _, _ = st.columns(6)
+        lcenter.button('Reset', on_click=reset)
+        center.button('Play/Pause', on_click=toggle_play)
+        
+        while st.session_state.playing:
+            st.session_state.azimuth = (st.session_state.azimuth + 1)
+            ax.view_init(ELEVATION_DEFAULT, st.session_state.azimuth)
+            player.pyplot(fig)
