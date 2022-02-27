@@ -770,7 +770,7 @@ if estimator_loaded:
             fig.legend(handles, labels, bbox_to_anchor=(1.5, 0.7))
             fig.set_size_inches(5/2, 5/2)
             col1, col2 = st.columns(2)
-            col2.pyplot(fig)
+            col1.pyplot(fig)
         
     if len(filters) in [2, 3] and (len(filters) <= len(sources)):
         # st.markdown("### Chromaticity diagram")
