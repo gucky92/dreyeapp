@@ -693,8 +693,8 @@ if estimator_loaded:
     if submitted:
         # catching errors
         if sampling_method == 'sample within gamut' and len(sources) < len(filters):
-            st.error("System of equations is overdetermined."
-                     "Add more light sources in order to sample in hull."
+            st.error("System of equations is overdetermined. "
+                     "Add more light sources in order to sample in hull. "
                      "There must be more light sources than sensitivities.")
             data = {}
         else:
@@ -759,16 +759,17 @@ if estimator_loaded:
         if Bfit is not None:
             est.gamut_plot(B=Bfit, sources_vectors=False, ncols=ncols, axes=axes, color='black', alpha=0.5, label='fits', marker='x')
         fig.suptitle("Gamut across opsin pairs")
-        if ncols == 3:
-            fig.set_size_inches(15/2, 5/2 * np.ceil(len(axes) / 3))
-        else:
-            fig.set_size_inches(5/2, 5/2)
-        
-            
         # create legend
         handles, labels = axes[0].get_legend_handles_labels()
         fig.legend(handles, labels, bbox_to_anchor=(1.2, 0.7))
-        st.pyplot(fig)
+        
+        if ncols == 3:
+            fig.set_size_inches(15/2, 5/2 * np.ceil(len(axes) / 3))
+            st.pyplot(fig)
+        else:
+            fig.set_size_inches(5/2, 5/2)
+            _, col, _ = st.columns((2, 3, 2))
+            col.pyplot(fig)
         
     if len(filters) in [2, 3] and (len(filters) <= len(sources)):
         # st.markdown("### Chromaticity diagram")
