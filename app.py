@@ -336,7 +336,20 @@ global_params = load_global_params()
 
 
 # title of app
-st.title("DrEye: Color Stimulus Design")
+st.markdown("## Design custom chromatic stimuli using drEye")
+
+st.markdown(
+"""
+[drEye](https://dreye.readthedocs.io/en/latest/) is a package that implements various approaches to design stimuli for sensory receptors. 
+This web application uses drEye to design chromatic stimuli given an arbitrary set of sensitivities and light sources (e.g. LEDs). 
+Since drEye implements a hardware-agnostic approach to stimulus design, different types of light sources
+can be combined to design similar stimuli given a set of sensitivities. 
+
+The preprint paper *"Exploiting color space geometry for visual stimulus design across animals"*
+available on [bioRxiv](https://www.biorxiv.org/content/10.1101/2022.01.17.476640v1) explains
+key concepts that are implemented in this web application.
+"""
+)
 
 ### --- the sidebar
 estimator_loaded = False
@@ -709,7 +722,7 @@ if estimator_loaded:
             data = register_and_fit(
                 est, wls, *st.session_state.args_submitted
             )
-    elif st.session_state.form_submitted:
+    elif 'form_submitted' in st.session_state and st.session_state.form_submitted:
         data = register_and_fit(
             est, wls, *st.session_state.args_submitted
         )
