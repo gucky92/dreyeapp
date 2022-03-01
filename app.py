@@ -356,7 +356,7 @@ estimator_loaded = False
 filters_loaded = False
 sources_loaded = False
 
-st.sidebar.markdown("### Assign a set of opsin sensitivities")
+st.sidebar.markdown("### (1) Assign a set of opsin sensitivities")
 # getting the filter
 filter_choice = st.sidebar.selectbox(
     "How do you want to construct your opsin sensitivities?", 
@@ -397,7 +397,7 @@ else:
     )
     
 if filters_loaded:
-    st.sidebar.markdown("### Assign a set of light sources")
+    st.sidebar.markdown("### (2) Assign a set of light sources")
     
     sources_type = st.sidebar.selectbox(
         "How do you want to define your light sources?", 
@@ -442,7 +442,7 @@ if filters_loaded:
         sources_loaded = True
         
 if filters_loaded and sources_loaded:
-    st.sidebar.markdown("### Receptor model parameters")
+    st.sidebar.markdown("### (3) Set receptor model parameters")
     baseline = st.sidebar.number_input(
         "Baseline absolute capture value (aka dark count)", 
         min_value=0.0, 
