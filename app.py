@@ -26,6 +26,7 @@ appfolder = os.path.dirname(__file__)
 AZIMUTH_DEFAULT = -45
 ELEVATION_DEFAULT = 30
 STANDARD_FLUX_SCALE = 10 ** 6 # micro
+STANDARD_FLUX_NAME = "uE"
 UNITS_OPTIONS = [
     'uE', 
     'E',
@@ -417,7 +418,7 @@ if filters_loaded:
     else:
         thorlabs_list = None
         sources_file = st.sidebar.file_uploader(
-            "Upload a `.csv` file with header columns `wls` and light sources' names.", 
+            "Upload a `.csv` file with header columns `wls` and light sources' names", 
             type='csv', 
             accept_multiple_files=False, 
         )
@@ -431,7 +432,7 @@ if filters_loaded:
         sources, sources_labels = load_sources(sources_file, wls, thorlabs_list, units=sources_units)
         n_sources = len(sources)        
         # max intensity
-        st.sidebar.markdown("Max intensity of each light source (in units of flux).")
+        st.sidebar.markdown(f"Max intensity of each light source (in {STANDARD_FLUX_NAME})")
         cols = st.sidebar.columns(2)
         max_ints = []
         for idx, label in enumerate(sources_labels):
@@ -454,12 +455,12 @@ if filters_loaded and sources_loaded:
     adaptional_type = st.sidebar.selectbox(
         "How should the adaptation of photoreceptors be calculated?", 
         options=[
-            'light source intensities', 
+            f'light source intensities ({STANDARD_FLUX_NAME})', 
             'absolute captures', 
             'intensity spectrum', 
         ]
     )
-    if adaptional_type == 'light source intensities':
+    if adaptional_type == f'light source intensities ({STANDARD_FLUX_NAME})':
         cols = st.sidebar.columns(2)
         adapt_ints = []
         for idx, label in enumerate(sources_labels):
@@ -482,8 +483,8 @@ if filters_loaded and sources_loaded:
         adapt_ints = None
     else:
         spectrum_file = st.sidebar.file_uploader(
-            "Spectrum photoreceptors are adapted to. "
-            "Upload a `.csv` file with header columns `wls` and `spectrum`. "
+            "Upload a `.csv` file with header columns `wls` and a "
+            "`spectrum` column corresponding to the background the photoreceptors are adapted to"
         )
         spectrum_units = st.sidebar.selectbox(UNITS_TEXT, UNITS_OPTIONS)
         spectrum = load_spectrum(spectrum_file, wls, units=spectrum_units)
@@ -701,7 +702,9 @@ if estimator_loaded:
     else:
         raise RuntimeError(f"Fit method not recognize: {fit_method}")
     
-    submitted = st.button('Submit')
+    _, col1, col2, _ = st.columns([3, 1, 1, 3])
+    submitted = col1.button('Submit')
+    clear = col2.button('Clear')
         
     if submitted:
         # catching errors
@@ -722,6 +725,9 @@ if estimator_loaded:
             data = register_and_fit(
                 est, wls, *st.session_state.args_submitted
             )
+    elif clear:
+        st.session_state.form_submitted = False
+        data = {}
     elif 'form_submitted' in st.session_state and st.session_state.form_submitted:
         data = register_and_fit(
             est, wls, *st.session_state.args_submitted
